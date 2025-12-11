@@ -3,15 +3,39 @@ const express = require("express");
 const cors = require("cors");
 const sqlite3 = require("sqlite3").verbose();
 const OpenAI = require("openai");
+const bodyParser = require("body-parser");
 
 const app = express();
 app.use(cors());
+app.use(bodyParser.json());
 app.use(express.json());
 
 const db = new sqlite3.Database("./expenses.db");
 
+function runQuery(sql, params = []) {
+  return new Promise((resolve) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) {
+        console.log("SQL Error:", err.message);
+        resolve([]);
+      } else resolve(rows || []);
+    });
+  });
+}
+
+function runExecute(sql, params = []) {
+  return new Promise((resolve) => {
+    db.run(sql, params, function (err) {
+      if (err) {
+        console.log("SQL Exec Error:", err.message);
+        resolve(false);
+      } else resolve(true);
+    });
+  });
+}
+
 db.run(`
-  CREATE TABLE IF NOT EXISTS expenses(
+  CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     amount REAL,
     category TEXT,
@@ -19,11 +43,6 @@ db.run(`
   )
 `);
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-// FIX timezone issues: always use UTC date format
 function makeUTC(y, m, d) {
   return new Date(Date.UTC(y, m, d));
 }
@@ -40,19 +59,16 @@ function fixExactDate(v) {
     return toISO(makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   }
 
-  // YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
     const [Y, M, D] = v.split("-").map(n => parseInt(n));
     return toISO(makeUTC(Y, M - 1, D));
   }
 
-  // MM-DD or M-D
   if (/^\d{1,2}-\d{1,2}$/.test(v)) {
     const [M, D] = v.split("-").map(n => parseInt(n));
     return toISO(makeUTC(year, M - 1, D));
   }
 
-  // "January 1" kind of format
   const monthName = v.match(/([A-Za-z]+)\s+(\d{1,2})/);
   if (monthName) {
     const month = new Date(`${monthName[1]} 1, 2000`).getMonth();
@@ -60,7 +76,6 @@ function fixExactDate(v) {
     return toISO(makeUTC(year, month, day));
   }
 
-  // If AI gives strange format → fallback to today
   return toISO(makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
@@ -93,7 +108,6 @@ function applyRelative(value) {
     return toISO(d);
   }
 
-  // "-10 days", "-2 months", etc
   const m = v.match(/(-?\d+)\s*(day|days|week|weeks|month|months|year|years)/);
   if (m) {
     let num = parseInt(m[1]);
@@ -110,6 +124,10 @@ function applyRelative(value) {
   return toISO(d);
 }
 
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
 app.post("/api/voice", async (req, res) => {
   const text = req.body.text || "";
 
@@ -121,17 +139,14 @@ app.post("/api/voice", async (req, res) => {
           role: "system",
           content: `
 Extract amount, category, and date meaning.
-
 Return JSON ONLY:
-
 {
  "amount": 50,
  "category": "food",
  "date_type": "exact" or "relative",
  "value": "YYYY-MM-DD" or "January 1" or "-10 days" or "today"
 }
-
-If no date is mentioned → use "today"
+If no date is mentioned → use "today".
 `
         },
         { role: "user", content: text }
@@ -141,22 +156,17 @@ If no date is mentioned → use "today"
     let raw = ai.choices[0].message.content.replace(/```json|```/g, "").trim();
     const result = JSON.parse(raw);
 
-    let finalDate = "";
+    let finalDate =
+      result.date_type === "exact"
+        ? fixExactDate(result.value)
+        : applyRelative(result.value);
 
-    if (result.date_type === "exact") {
-      finalDate = fixExactDate(result.value);
-    } else {
-      finalDate = applyRelative(result.value);
-    }
-
-    db.run(
+    await runExecute(
       "INSERT INTO expenses(amount, category, date) VALUES (?,?,?)",
-      [result.amount || 0, result.category || "other", finalDate],
-      err => {
-        if (err) return res.json({ success: false, error: "DB error" });
-        res.json({ success: true, date: finalDate });
-      }
+      [result.amount || 0, result.category || "other", finalDate]
     );
+
+    res.json({ success: true, date: finalDate });
 
   } catch (err) {
     console.log(err);
@@ -164,20 +174,62 @@ If no date is mentioned → use "today"
   }
 });
 
-app.get("/api/expenses", (req, res) => {
-  db.all("SELECT * FROM expenses ORDER BY id DESC", (err, rows) => {
-    res.json(rows || []);
-  });
+
+app.get("/api/expenses", async (req, res) => {
+  const rows = await runQuery("SELECT * FROM expenses ORDER BY id DESC");
+  res.json(rows);
 });
 
-app.delete("/api/delete-last", (req, res) => {
-  db.get("SELECT id FROM expenses ORDER BY id DESC LIMIT 1", (err, row) => {
-    if (!row) return res.json({ success: false });
+app.get("/api/week", async (req, res) => {
+  const rows = await runQuery(`
+    SELECT * FROM expenses 
+    WHERE date >= date('now','-7 day')
+    ORDER BY id DESC
+  `);
+  res.json(rows);
+});
 
-    db.run("DELETE FROM expenses WHERE id = ?", [row.id], () => {
-      res.json({ success: true });
-    });
-  });
+app.get("/api/month", async (req, res) => {
+  const rows = await runQuery(`
+    SELECT * FROM expenses 
+    WHERE strftime('%m', date) = strftime('%m','now')
+    AND strftime('%Y', date) = strftime('%Y','now')
+    ORDER BY id DESC
+  `);
+  res.json(rows);
+});
+
+app.get("/api/year", async (req, res) => {
+  const rows = await runQuery(`
+    SELECT * FROM expenses 
+    WHERE strftime('%Y', date) = strftime('%Y','now')
+    ORDER BY id DESC
+  `);
+  res.json(rows);
+});
+
+app.post("/api/custom", async (req, res) => {
+  const { from, to } = req.body;
+
+  const d1 = new Date(from);
+  const d2 = new Date(to);
+
+  if (isNaN(d1) || isNaN(d2)) return res.json([]);
+
+  const rows = await runQuery(
+    `SELECT * FROM expenses WHERE date BETWEEN ? AND ? ORDER BY id DESC`,
+    [from, to]
+  );
+
+  res.json(rows);
+});
+
+app.delete("/api/delete-last", async (req, res) => {
+  const rows = await runQuery(`SELECT id FROM expenses ORDER BY id DESC LIMIT 1`);
+  if (rows.length === 0) return res.json({ success: false });
+
+  await runExecute(`DELETE FROM expenses WHERE id = ?`, [rows[0].id]);
+  res.json({ success: true });
 });
 
 app.listen(5000, () => console.log("Server running on 5000"));
