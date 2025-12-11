@@ -23,34 +23,91 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-function applyRelative(type, value) {
-  let d = new Date();
+// FIX timezone issues: always use UTC date format
+function makeUTC(y, m, d) {
+  return new Date(Date.UTC(y, m, d));
+}
 
-  if (type === "relative") {
-    value = value.toLowerCase();
+function toISO(date) {
+  return date.toISOString().slice(0, 10);
+}
 
-    if (value.includes("day")) {
-      let n = parseInt(value);
-      d.setDate(d.getDate() + n);
-    }
+function fixExactDate(v) {
+  const now = new Date();
+  const year = now.getFullYear();
 
-    if (value.includes("week")) {
-      let n = parseInt(value);
-      d.setDate(d.getDate() + n * 7);
-    }
-
-    if (value.includes("month")) {
-      let n = parseInt(value);
-      d.setMonth(d.getMonth() + n);
-    }
-
-    if (value.includes("year")) {
-      let n = parseInt(value);
-      d.setFullYear(d.getFullYear() + n);
-    }
+  if (!v || v.toLowerCase() === "today") {
+    return toISO(makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   }
 
-  return d.toISOString().slice(0, 10);
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    const [Y, M, D] = v.split("-").map(n => parseInt(n));
+    return toISO(makeUTC(Y, M - 1, D));
+  }
+
+  // MM-DD or M-D
+  if (/^\d{1,2}-\d{1,2}$/.test(v)) {
+    const [M, D] = v.split("-").map(n => parseInt(n));
+    return toISO(makeUTC(year, M - 1, D));
+  }
+
+  // "January 1" kind of format
+  const monthName = v.match(/([A-Za-z]+)\s+(\d{1,2})/);
+  if (monthName) {
+    const month = new Date(`${monthName[1]} 1, 2000`).getMonth();
+    const day = parseInt(monthName[2]);
+    return toISO(makeUTC(year, month, day));
+  }
+
+  // If AI gives strange format → fallback to today
+  return toISO(makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+function applyRelative(value) {
+  const now = new Date();
+  let d = makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+
+  let v = value.toLowerCase().trim();
+
+  if (v === "today") return toISO(d);
+  if (v === "yesterday") {
+    d.setUTCDate(d.getUTCDate() - 1);
+    return toISO(d);
+  }
+  if (v === "day before yesterday") {
+    d.setUTCDate(d.getUTCDate() - 2);
+    return toISO(d);
+  }
+
+  if (v === "last week") {
+    d.setUTCDate(d.getUTCDate() - 7);
+    return toISO(d);
+  }
+  if (v === "last month") {
+    d.setUTCMonth(d.getUTCMonth() - 1);
+    return toISO(d);
+  }
+  if (v === "last year") {
+    d.setUTCFullYear(d.getUTCFullYear() - 1);
+    return toISO(d);
+  }
+
+  // "-10 days", "-2 months", etc
+  const m = v.match(/(-?\d+)\s*(day|days|week|weeks|month|months|year|years)/);
+  if (m) {
+    let num = parseInt(m[1]);
+    const unit = m[2];
+
+    if (unit.startsWith("day")) d.setUTCDate(d.getUTCDate() + num);
+    if (unit.startsWith("week")) d.setUTCDate(d.getUTCDate() + num * 7);
+    if (unit.startsWith("month")) d.setUTCMonth(d.getUTCMonth() + num);
+    if (unit.startsWith("year")) d.setUTCFullYear(d.getUTCFullYear() + num);
+
+    return toISO(d);
+  }
+
+  return toISO(d);
 }
 
 app.post("/api/voice", async (req, res) => {
@@ -65,55 +122,45 @@ app.post("/api/voice", async (req, res) => {
           content: `
 Extract amount, category, and date meaning.
 
-Return this JSON ONLY:
+Return JSON ONLY:
 
 {
- "amount": number,
- "category": "food/groceries/shopping/health/travel/bills/entertainment/other",
+ "amount": 50,
+ "category": "food",
  "date_type": "exact" or "relative",
- "value": "YYYY-MM-DD" or "-1 days" or "-2 months" etc
+ "value": "YYYY-MM-DD" or "January 1" or "-10 days" or "today"
 }
 
-Rules:
-- "yesterday" → "relative", "-1 days"
-- "day before yesterday" → "relative", "-2 days"
-- "x days ago" → "relative", "-x days"
-- "x weeks ago" → "relative", "-x weeks"
-- "x months ago" → "relative", "-x months"
-- "x years ago" → "relative", "-x years"
-- "last month" → "relative", "-1 months"
-- "last week" → "relative", "-1 weeks"
-- "last year" → "relative", "-1 years"
-
-If date explicitly mentioned → exact.
-If no date mentioned → exact with today's date.
+If no date is mentioned → use "today"
 `
         },
         { role: "user", content: text }
       ]
     });
 
-    let raw = ai.choices[0].message.content.trim();
-    raw = raw.replace(/```json|```/g, "");
+    let raw = ai.choices[0].message.content.replace(/```json|```/g, "").trim();
     const result = JSON.parse(raw);
 
     let finalDate = "";
 
     if (result.date_type === "exact") {
-      finalDate = result.value;
+      finalDate = fixExactDate(result.value);
     } else {
-      finalDate = applyRelative("relative", result.value);
+      finalDate = applyRelative(result.value);
     }
 
     db.run(
       "INSERT INTO expenses(amount, category, date) VALUES (?,?,?)",
-      [result.amount, result.category, finalDate]
+      [result.amount || 0, result.category || "other", finalDate],
+      err => {
+        if (err) return res.json({ success: false, error: "DB error" });
+        res.json({ success: true, date: finalDate });
+      }
     );
 
-    res.json({ success: true, date: finalDate, data: result });
   } catch (err) {
     console.log(err);
-    res.json({ success: false, error: "AI extraction failed" });
+    res.json({ success: false, error: "AI error" });
   }
 });
 
