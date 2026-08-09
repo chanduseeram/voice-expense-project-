@@ -17,6 +17,16 @@ const CATEGORY_COLORS = [
   "#6b6b63"
 ];
 
+// Single source of truth for the sidebar/topbar nav links, so both the
+// mobile fixed bar and the desktop sidebar stay in sync and can each
+// show which section is "active".
+const NAV_ITEMS = [
+  { key: "dashboard", label: "Dashboard", target: "panel-quickadd" },
+  { key: "add", label: "Add Expense", target: "panel-quickadd" },
+  { key: "entries", label: "Entries", target: "panel-entries" },
+  { key: "analytics", label: "Analytics", target: "panel-analytics" }
+];
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -59,6 +69,7 @@ function Dashboard({ email, onLogout }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
   const [showAllEntries, setShowAllEntries] = useState(false);
+  const [activeNav, setActiveNav] = useState("dashboard");
   const ENTRY_PREVIEW_COUNT = 5;
 
   const showToast = useCallback((type, text) => {
@@ -224,16 +235,44 @@ function Dashboard({ email, onLogout }) {
 
   const categoryOptionsFor = (type) => (type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES);
 
-  const scrollTo = (id) => {
+  // Highlights the clicked nav item and scrolls its target panel into view.
+  // Nothing else changes on the page — there's only one page — but the
+  // sidebar/topbar reflect which section the user last chose.
+  const goToNav = (item) => {
+    setActiveNav(item.key);
     setMobileNavOpen(false);
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById(item.target)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   return (
     <div className="shell">
-      <button className="mobile-nav-toggle" onClick={() => setMobileNavOpen((v) => !v)}>
-        ☰ Menu
-      </button>
+      {/* Fixed mobile top bar: hamburger + app name + email/logout.
+          Stays pinned to the top of the viewport regardless of scroll
+          position or which panel/menu is open. */}
+      <div className="mobile-topbar">
+        <div className="mobile-topbar-left">
+          <button
+            className="mobile-topbar-hamburger"
+            onClick={() => setMobileNavOpen((v) => !v)}
+            aria-label="Toggle menu"
+          >
+            ☰
+          </button>
+          <span className="mobile-topbar-title">Voice Expense Tracker</span>
+        </div>
+        <div className="mobile-topbar-right">
+          <span className="mobile-topbar-email">{email}</span>
+          <button className="mobile-topbar-logout" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
+      </div>
+
+      {/* Dims the page and lets you tap-away to close the mobile sidebar */}
+      <div
+        className={`sidebar-overlay ${mobileNavOpen ? "sidebar-overlay--visible" : ""}`}
+        onClick={() => setMobileNavOpen(false)}
+      />
 
       <aside className={`sidebar ${mobileNavOpen ? "sidebar--open" : ""}`}>
         <div className="brand">
@@ -249,19 +288,20 @@ function Dashboard({ email, onLogout }) {
           </div>
         </div>
 
-        <nav className="nav-list nav-list--mobile-only">
-          <button className="nav-item nav-item--active" onClick={() => scrollTo("panel-quickadd")}>
-            Dashboard
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("panel-quickadd")}>
-            Add Expense
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("panel-entries")}>
-            Entries
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("panel-analytics")}>
-            Analytics
-          </button>
+        {/* Shown on both mobile (inside the slide-in sidebar) and desktop
+            (as the persistent left-hand nav). Clicking an item scrolls to
+            its panel and marks that item active, even though it's all one
+            page. */}
+        <nav className="nav-list">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              className={`nav-item ${activeNav === item.key ? "nav-item--active" : ""}`}
+              onClick={() => goToNav(item)}
+            >
+              {item.label}
+            </button>
+          ))}
         </nav>
 
         <div className="voice-tips">
