@@ -58,6 +58,8 @@ function Dashboard({ email, onLogout }) {
   const [savingVoice, setSavingVoice] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
+  const [showAllEntries, setShowAllEntries] = useState(false);
+  const ENTRY_PREVIEW_COUNT = 5;
 
   const showToast = useCallback((type, text) => {
     setToast({ type, text });
@@ -85,6 +87,7 @@ function Dashboard({ email, onLogout }) {
 
       const res = await api.get(url);
       setExpenses(Array.isArray(res.data) ? res.data : []);
+      setShowAllEntries(false);
     } catch (err) {
       if (!handleAuthError(err)) showToast("error", "Could not reach the server");
     } finally {
@@ -221,6 +224,11 @@ function Dashboard({ email, onLogout }) {
 
   const categoryOptionsFor = (type) => (type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES);
 
+  const scrollTo = (id) => {
+    setMobileNavOpen(false);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <div className="shell">
       <button className="mobile-nav-toggle" onClick={() => setMobileNavOpen((v) => !v)}>
@@ -241,8 +249,19 @@ function Dashboard({ email, onLogout }) {
           </div>
         </div>
 
-        <nav className="nav-list">
-          <button className="nav-item nav-item--active">Dashboard</button>
+        <nav className="nav-list nav-list--mobile-only">
+          <button className="nav-item nav-item--active" onClick={() => scrollTo("panel-quickadd")}>
+            Dashboard
+          </button>
+          <button className="nav-item" onClick={() => scrollTo("panel-quickadd")}>
+            Add Expense
+          </button>
+          <button className="nav-item" onClick={() => scrollTo("panel-entries")}>
+            Entries
+          </button>
+          <button className="nav-item" onClick={() => scrollTo("panel-analytics")}>
+            Analytics
+          </button>
         </nav>
 
         <div className="voice-tips">
@@ -262,9 +281,10 @@ function Dashboard({ email, onLogout }) {
             <span className="eyebrow">Ledger</span>
             <h1>Voice Expense Tracker</h1>
           </div>
-          <div className="account-row">
+          <div className="profile-chip">
+            <span className="profile-avatar">{email?.[0]?.toUpperCase() || "?"}</span>
             <span className="account-email">{email}</span>
-            <button className="link-btn" onClick={onLogout}>
+            <button className="btn btn--small btn--ghost" onClick={onLogout}>
               Log out
             </button>
           </div>
@@ -396,8 +416,9 @@ function Dashboard({ email, onLogout }) {
               ) : expenses.length === 0 ? (
                 <p className="empty-state">Nothing here yet. Speak or add your first entry above.</p>
               ) : (
-                <div className="receipt">
-                  {expenses.map((row) => (
+                <>
+                  <div className="receipt">
+                    {(showAllEntries ? expenses : expenses.slice(0, ENTRY_PREVIEW_COUNT)).map((row) => (
                     <div className="receipt-row" key={row.id}>
                       {editingId === row.id ? (
                         <>
@@ -467,7 +488,17 @@ function Dashboard({ email, onLogout }) {
                       )}
                     </div>
                   ))}
-                </div>
+                  </div>
+                  {expenses.length > ENTRY_PREVIEW_COUNT && (
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--wide show-more-btn"
+                      onClick={() => setShowAllEntries((v) => !v)}
+                    >
+                      {showAllEntries ? "Show less" : `Show more (${expenses.length - ENTRY_PREVIEW_COUNT} more)`}
+                    </button>
+                  )}
+                </>
               )}
             </section>
           </div>

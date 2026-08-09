@@ -79,6 +79,10 @@
   gap: 4px;
 }
 
+.nav-list--mobile-only {
+  display: none;
+}
+
 .nav-item {
   text-align: left;
   background: none;
@@ -172,6 +176,34 @@
 
 .account-email {
   color: #6b6b63;
+}
+
+.profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #e4e1d8;
+  border-radius: 999px;
+  padding: 6px 8px 6px 6px;
+}
+
+.profile-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #1f7a5c;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.show-more-btn {
+  margin-top: 12px;
 }
 
 .link-btn {
@@ -720,6 +752,10 @@
 
   .sidebar--open {
     left: 0;
+  }
+
+  .nav-list--mobile-only {
+    display: flex;
   }
 
   .main {
