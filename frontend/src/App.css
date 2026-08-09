@@ -277,6 +277,10 @@
   background: #1f7a5c;
 }
 
+.btn--save {
+  background: #2f6fae;
+}
+
 .btn--danger {
   background: #b5443b;
 }
@@ -363,6 +367,10 @@
 .toggle-btn--income.toggle-btn--active {
   background: #2f6fae;
   border-color: #2f6fae;
+}
+
+.manual-form {
+  margin-top: 14px;
 }
 
 .manual-form-row {
@@ -604,6 +612,10 @@
   font-size: 16px;
   font-weight: 600;
   color: #1b2430;
+}
+
+.stat-value--income {
+  color: #1f7a5c;
 }
 
 .stat-label {

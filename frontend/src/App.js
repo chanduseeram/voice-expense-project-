@@ -57,6 +57,7 @@ function Dashboard({ email, onLogout }) {
   const [manual, setManual] = useState({ amount: "", category: "food", date: todayISO(), type: "expense" });
   const [savingVoice, setSavingVoice] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [showManualForm, setShowManualForm] = useState(false);
 
   const showToast = useCallback((type, text) => {
     setToast({ type, text });
@@ -218,11 +219,6 @@ function Dashboard({ email, onLogout }) {
     }
   };
 
-  const scrollTo = (id) => {
-    setMobileNavOpen(false);
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
   const categoryOptionsFor = (type) => (type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES);
 
   return (
@@ -246,27 +242,16 @@ function Dashboard({ email, onLogout }) {
         </div>
 
         <nav className="nav-list">
-          <button className="nav-item nav-item--active" onClick={() => scrollTo("panel-quickadd")}>
-            Dashboard
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("panel-quickadd")}>
-            Add Expense
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("panel-entries")}>
-            Entries
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("panel-analytics")}>
-            Analytics
-          </button>
+          <button className="nav-item nav-item--active">Dashboard</button>
         </nav>
 
         <div className="voice-tips">
           <div className="voice-tips-title">Voice Commands</div>
           <div className="voice-tips-sub">Try saying:</div>
           <ul>
-            <li>"Add ₹200 for food"</li>
-            <li>"I spent ₹500 on shopping"</li>
-            <li>"My friend gave me ₹1000"</li>
+            <li>"I spent ₹200 on food today"</li>
+            <li>"My friend gave me back ₹500, three days back"</li>
+            <li>"I spent ₹1000 on shopping on June 5th 2026"</li>
           </ul>
         </div>
       </aside>
@@ -320,7 +305,7 @@ function Dashboard({ email, onLogout }) {
                     </p>
                   </div>
 
-                  <button className="btn btn--primary btn--wide" onClick={sendVoiceExpense} disabled={savingVoice}>
+                  <button className="btn btn--save btn--wide" onClick={sendVoiceExpense} disabled={savingVoice}>
                     {savingVoice ? "Saving…" : "Save Spoken Expense"}
                   </button>
                 </>
@@ -328,53 +313,62 @@ function Dashboard({ email, onLogout }) {
 
               <div className="divider" />
 
-              <h3 className="panel-subtitle">Add manually</h3>
-              <form className="manual-form" onSubmit={addManualExpense}>
-                <div className="type-toggle">
-                  <button
-                    type="button"
-                    className={`toggle-btn ${manual.type === "expense" ? "toggle-btn--active" : ""}`}
-                    onClick={() => setManual({ ...manual, type: "expense", category: "food" })}
-                  >
-                    Expense
-                  </button>
-                  <button
-                    type="button"
-                    className={`toggle-btn toggle-btn--income ${manual.type === "income" ? "toggle-btn--active" : ""}`}
-                    onClick={() => setManual({ ...manual, type: "income", category: "salary" })}
-                  >
-                    Income
-                  </button>
-                </div>
-                <div className="manual-form-row">
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="Amount"
-                    value={manual.amount}
-                    onChange={(e) => setManual({ ...manual, amount: e.target.value })}
-                  />
-                  <select
-                    value={manual.category}
-                    onChange={(e) => setManual({ ...manual, category: e.target.value })}
-                  >
-                    {categoryOptionsFor(manual.type).map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="date"
-                    value={manual.date}
-                    onChange={(e) => setManual({ ...manual, date: e.target.value })}
-                  />
-                  <button type="submit" className="btn btn--primary">
-                    Add
-                  </button>
-                </div>
-              </form>
+              <button
+                type="button"
+                className="btn btn--ghost btn--wide"
+                onClick={() => setShowManualForm((v) => !v)}
+              >
+                {showManualForm ? "Hide manual entry" : "+ Manual entry"}
+              </button>
+
+              {showManualForm && (
+                <form className="manual-form" onSubmit={addManualExpense}>
+                  <div className="type-toggle">
+                    <button
+                      type="button"
+                      className={`toggle-btn ${manual.type === "expense" ? "toggle-btn--active" : ""}`}
+                      onClick={() => setManual({ ...manual, type: "expense", category: "food" })}
+                    >
+                      Expense
+                    </button>
+                    <button
+                      type="button"
+                      className={`toggle-btn toggle-btn--income ${manual.type === "income" ? "toggle-btn--active" : ""}`}
+                      onClick={() => setManual({ ...manual, type: "income", category: "salary" })}
+                    >
+                      Income
+                    </button>
+                  </div>
+                  <div className="manual-form-row">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Amount"
+                      value={manual.amount}
+                      onChange={(e) => setManual({ ...manual, amount: e.target.value })}
+                    />
+                    <select
+                      value={manual.category}
+                      onChange={(e) => setManual({ ...manual, category: e.target.value })}
+                    >
+                      {categoryOptionsFor(manual.type).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="date"
+                      value={manual.date}
+                      onChange={(e) => setManual({ ...manual, date: e.target.value })}
+                    />
+                    <button type="submit" className="btn btn--primary">
+                      Add
+                    </button>
+                  </div>
+                </form>
+              )}
             </section>
 
             <section className="panel" id="panel-entries">
@@ -515,6 +509,10 @@ function Dashboard({ email, onLogout }) {
                 <div className="stat-box">
                   <span className="stat-value">₹{formatCurrency(totalExpense)}</span>
                   <span className="stat-label">Total Expenses</span>
+                </div>
+                <div className="stat-box">
+                  <span className="stat-value stat-value--income">₹{formatCurrency(totalIncome)}</span>
+                  <span className="stat-label">Total Income</span>
                 </div>
                 <div className="stat-box">
                   <span className="stat-value">{expenses.length}</span>
