@@ -118,7 +118,7 @@ useEffect(() => {
   silenceTimerRef.current = setTimeout(() => {
     SpeechRecognition.stopListening();
     silenceTimerRef.current = null;
-  }, 3000);
+  }, 5000);
 
   return () => {
     if (silenceTimerRef.current) {
