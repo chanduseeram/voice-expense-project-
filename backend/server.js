@@ -146,6 +146,7 @@ const INCOME_TRIGGER_WORDS = [
   "gave me", "received", "got back", "refund", "salary", "cashback",
   "earned", "credited", "returned", "paid me", "got paid"
 ];
+const WEAK_INCOME_WORDS = ["got", "get"];
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
@@ -214,7 +215,11 @@ function extractDateFromText(lower) {
 }
 
 function detectType(lower) {
-  return INCOME_TRIGGER_WORDS.some((w) => lower.includes(w)) ? "income" : "expense";
+  if (INCOME_TRIGGER_WORDS.some((w) => lower.includes(w))) return "income";
+  const hasExpenseKeyword = Object.values(EXPENSE_KEYWORDS).some((words) => words.some((w) => lower.includes(w)));
+  if (hasExpenseKeyword) return "expense";
+  if (WEAK_INCOME_WORDS.some((w) => lower.includes(w))) return "income";
+  return "expense";
 }
 
 function detectCategory(lower, type) {
@@ -225,13 +230,53 @@ function detectCategory(lower, type) {
   return "other";
 }
 
+// Spelled-out numbers ("twenty", "one hundred fifty") for when speech-to-text
+// doesn't produce digits.
+const NUM_ONES = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+  ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+  seventeen: 17, eighteen: 18, nineteen: 19
+};
+const NUM_TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const NUM_WORDS = new Set([...Object.keys(NUM_ONES), ...Object.keys(NUM_TENS), "hundred", "thousand"]);
+
+function wordsToNumber(words) {
+  let total = 0, current = 0, found = false;
+  for (const w of words) {
+    if (w in NUM_ONES) { current += NUM_ONES[w]; found = true; }
+    else if (w in NUM_TENS) { current += NUM_TENS[w]; found = true; }
+    else if (w === "hundred") { current = (current || 1) * 100; found = true; }
+    else if (w === "thousand") { total += (current || 1) * 1000; current = 0; found = true; }
+  }
+  return found ? total + current : null;
+}
+
+function extractSpokenNumberAmount(lower) {
+  const tokens = lower.replace(/[^a-z0-9\s.]/g, " ").split(/\s+/).filter(Boolean);
+  let run = [];
+  for (let i = 0; i <= tokens.length; i++) {
+    const t = tokens[i];
+    if (t && NUM_WORDS.has(t)) {
+      run.push(t);
+    } else {
+      if (run.length) {
+        const val = wordsToNumber(run);
+        if (val !== null && val > 0) return val;
+      }
+      run = [];
+    }
+  }
+  return null;
+}
+
 function extractAmountFromText(lower, dateRaw) {
   let masked = lower;
   if (dateRaw) masked = masked.split(dateRaw).join(" ");
   // mask standalone 4-digit years so they're never mistaken for the amount
   masked = masked.replace(/\b(19|20)\d{2}\b/g, " ");
   const m = masked.match(/(\d+(?:\.\d+)?)/);
-  return m ? parseFloat(m[1]) : null;
+  if (m) return parseFloat(m[1]);
+  return extractSpokenNumberAmount(masked);
 }
 
 function parseExpenseText(text) {
