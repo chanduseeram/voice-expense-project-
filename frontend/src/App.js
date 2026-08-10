@@ -1,5 +1,5 @@
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import api from "./api";
 import Login from "./Login";
 import "./App.css";
@@ -78,6 +78,55 @@ function Dashboard({ email, onLogout }) {
   const [showAllEntries, setShowAllEntries] = useState(false);
   const [activeNav, setActiveNav] = useState("dashboard");
   const ENTRY_PREVIEW_COUNT = 5;
+  const silenceTimerRef = useRef(null);
+
+  // Stop listening when the user switches tabs or minimizes/leaves the page.
+useEffect(() => {
+  const handleVisibilityChange = () => {
+    if (document.hidden) {
+      SpeechRecognition.stopListening();
+
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+    }
+  };
+
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+
+  return () => {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+  };
+}, []);
+
+
+// Stop voice recognition after 3 seconds without new speech.
+useEffect(() => {
+  if (!listening) {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    return;
+  }
+
+  if (silenceTimerRef.current) {
+    clearTimeout(silenceTimerRef.current);
+  }
+
+  silenceTimerRef.current = setTimeout(() => {
+    SpeechRecognition.stopListening();
+    silenceTimerRef.current = null;
+  }, 3000);
+
+  return () => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  };
+}, [transcript, listening]);
 
   const showToast = useCallback((type, text) => {
     setToast({ type, text });
