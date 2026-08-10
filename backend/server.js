@@ -7,7 +7,6 @@ const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { Pool } = require("pg");
-const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -127,69 +126,118 @@ function isValidISODate(str) {
   return !isNaN(d.getTime());
 }
 
-function fixExactDate(v) {
-  const now = new Date();
-  const year = now.getFullYear();
+// ---------- Local rule-based voice-text parser (no external AI, no API key, no cost) ----------
+const EXPENSE_KEYWORDS = {
+  food: ["food", "lunch", "dinner", "breakfast", "grocery", "groceries", "snack", "restaurant", "coffee", "tea", "meal", "pizza", "burger", "eat", "eating"],
+  travel: ["travel", "uber", "ola", "taxi", "cab", "bus", "train", "flight", "fuel", "petrol", "diesel", "metro", "auto", "ride"],
+  shopping: ["shopping", "shirt", "shoes", "clothes", "amazon", "flipkart", "dress", "mall", "bought", "buy"],
+  bills: ["bill", "bills", "electricity", "recharge", "rent", "wifi", "internet", "subscription"],
+  health: ["health", "medicine", "doctor", "hospital", "pharmacy", "medical", "clinic"],
+  entertainment: ["movie", "entertainment", "netflix", "game", "concert", "party", "outing"]
+};
 
-  if (!v || String(v).toLowerCase() === "today") {
-    return toISO(makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
-    const [Y, M, D] = v.split("-").map((n) => parseInt(n, 10));
-    return toISO(makeUTC(Y, M - 1, D));
-  }
-  if (/^\d{1,2}-\d{1,2}$/.test(v)) {
-    const [M, D] = v.split("-").map((n) => parseInt(n, 10));
-    return toISO(makeUTC(year, M - 1, D));
-  }
-  const monthName = v.match(/([A-Za-z]+)\s+(\d{1,2})/);
-  if (monthName) {
-    const month = new Date(`${monthName[1]} 1, 2000`).getMonth();
-    if (!isNaN(month)) {
-      const day = parseInt(monthName[2], 10);
-      return toISO(makeUTC(year, month, day));
+const INCOME_KEYWORDS = {
+  salary: ["salary", "paycheck", "wages"],
+  refund: ["refund", "cashback", "returned my money", "return"],
+  gift: ["gift", "gave me", "friend gave", "birthday money"]
+};
+
+const INCOME_TRIGGER_WORDS = [
+  "gave me", "received", "got back", "refund", "salary", "cashback",
+  "earned", "credited", "returned", "paid me", "got paid"
+];
+
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+const RELATIVE_UNIT_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, twenty: 20, thirty: 30
+};
+
+function extractDateFromText(lower) {
+  const now = new Date();
+
+  // explicit "<month> <day>(st/nd/rd/th)? <year>?"
+  let m = lower.match(/\b([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/);
+  if (m && MONTHS.includes(m[1])) {
+    const month = MONTHS.indexOf(m[1]);
+    const day = parseInt(m[2], 10);
+    const year = m[3] ? parseInt(m[3], 10) : now.getUTCFullYear();
+    if (day >= 1 && day <= 31) {
+      return { date: toISO(makeUTC(year, month, day)), raw: m[0] };
     }
   }
-  return toISO(makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  // ISO date yyyy-mm-dd
+  m = lower.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (m) {
+    return { date: toISO(makeUTC(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10))), raw: m[0] };
+  }
+
+  // "N days/weeks/months/years back/ago" — N can be a digit or spelled out
+  const numWordPattern = Object.keys(RELATIVE_UNIT_WORDS).join("|");
+  m = lower.match(new RegExp(`\\b(\\d+|${numWordPattern})\\s*(day|days|week|weeks|month|months|year|years)\\s*(back|ago)\\b`));
+  if (m) {
+    const num = /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : RELATIVE_UNIT_WORDS[m[1]];
+    const unit = m[2];
+    let d = makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    if (unit.startsWith("day")) d.setUTCDate(d.getUTCDate() - num);
+    if (unit.startsWith("week")) d.setUTCDate(d.getUTCDate() - num * 7);
+    if (unit.startsWith("month")) d.setUTCMonth(d.getUTCMonth() - num);
+    if (unit.startsWith("year")) d.setUTCFullYear(d.getUTCFullYear() - num);
+    return { date: toISO(d), raw: m[0] };
+  }
+
+  // literal phrases
+  const literals = [
+    ["day before yesterday", -2],
+    ["yesterday", -1],
+    ["today", 0],
+    ["last week", -7],
+    ["last month", null],
+    ["last year", null]
+  ];
+  for (const [phrase, deltaDays] of literals) {
+    if (lower.includes(phrase)) {
+      let d = makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+      if (phrase === "last month") d.setUTCMonth(d.getUTCMonth() - 1);
+      else if (phrase === "last year") d.setUTCFullYear(d.getUTCFullYear() - 1);
+      else d.setUTCDate(d.getUTCDate() + deltaDays);
+      return { date: toISO(d), raw: phrase };
+    }
+  }
+
+  return { date: toISO(makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), raw: null };
 }
 
-function applyRelative(value) {
-  const now = new Date();
-  let d = makeUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const v = String(value || "today").toLowerCase().trim();
+function detectType(lower) {
+  return INCOME_TRIGGER_WORDS.some((w) => lower.includes(w)) ? "income" : "expense";
+}
 
-  if (v === "today") return toISO(d);
-  if (v === "yesterday") {
-    d.setUTCDate(d.getUTCDate() - 1);
-    return toISO(d);
+function detectCategory(lower, type) {
+  const map = type === "income" ? INCOME_KEYWORDS : EXPENSE_KEYWORDS;
+  for (const [category, words] of Object.entries(map)) {
+    if (words.some((w) => lower.includes(w))) return category;
   }
-  if (v === "day before yesterday") {
-    d.setUTCDate(d.getUTCDate() - 2);
-    return toISO(d);
-  }
-  if (v === "last week") {
-    d.setUTCDate(d.getUTCDate() - 7);
-    return toISO(d);
-  }
-  if (v === "last month") {
-    d.setUTCMonth(d.getUTCMonth() - 1);
-    return toISO(d);
-  }
-  if (v === "last year") {
-    d.setUTCFullYear(d.getUTCFullYear() - 1);
-    return toISO(d);
-  }
-  const m = v.match(/(-?\d+)\s*(day|days|week|weeks|month|months|year|years)/);
-  if (m) {
-    const num = parseInt(m[1], 10);
-    const unit = m[2];
-    if (unit.startsWith("day")) d.setUTCDate(d.getUTCDate() + num);
-    if (unit.startsWith("week")) d.setUTCDate(d.getUTCDate() + num * 7);
-    if (unit.startsWith("month")) d.setUTCMonth(d.getUTCMonth() + num);
-    if (unit.startsWith("year")) d.setUTCFullYear(d.getUTCFullYear() + num);
-    return toISO(d);
-  }
-  return toISO(d);
+  return "other";
+}
+
+function extractAmountFromText(lower, dateRaw) {
+  let masked = lower;
+  if (dateRaw) masked = masked.split(dateRaw).join(" ");
+  // mask standalone 4-digit years so they're never mistaken for the amount
+  masked = masked.replace(/\b(19|20)\d{2}\b/g, " ");
+  const m = masked.match(/(\d+(?:\.\d+)?)/);
+  return m ? parseFloat(m[1]) : null;
+}
+
+function parseExpenseText(text) {
+  const lower = text.toLowerCase().trim();
+  const { date, raw: dateRaw } = extractDateFromText(lower);
+  const type = detectType(lower);
+  const category = detectCategory(lower, type);
+  const amount = extractAmountFromText(lower, dateRaw);
+  return { amount, category, type, date };
 }
 
 // ---------- Input validation ----------
@@ -248,13 +296,6 @@ function requireAuth(req, res, next) {
     res.status(401).json({ success: false, error: "Invalid or expired session" });
   }
 }
-
-// ---------- Gemini client (Google AI Studio, free tier: no billing needed at this volume) ----------
-const geminiKey = process.env.GEMINI_API_KEY;
-if (!geminiKey) {
-  console.warn("WARNING: GEMINI_API_KEY is not set. Voice parsing (/api/voice) will fail until configured.");
-}
-const client = geminiKey ? new GoogleGenAI({ apiKey: geminiKey }) : null;
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -333,51 +374,16 @@ app.post(
   wrap(async (req, res) => {
     const text = typeof req.body.text === "string" ? req.body.text.trim() : "";
     if (!text) return res.status(400).json({ success: false, error: "No speech text provided" });
-    if (!client) {
-      return res
-        .status(503)
-        .json({ success: false, error: "Voice parsing is not configured on this server" });
+
+    const result = parseExpenseText(text);
+    if (result.amount === null) {
+      return res.status(422).json({ success: false, error: "Could not find an amount in that" });
     }
-
-    let result;
-    try {
-      const ai = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: `Extract the amount, category, date meaning, and transaction type from this description.
-
-"type" is "income" if money came TO the person (someone gave/paid/sent them money, salary, refund, cashback, they received/earned/got money) — otherwise "type" is "expense" (they spent/paid/bought something).
-
-Return JSON only, no markdown fences, matching exactly this shape:
-{"amount": 50, "category": "food", "type": "expense" or "income", "date_type": "exact" or "relative", "value": "YYYY-MM-DD" or "January 1" or "-10 days" or "today"}
-If no date is mentioned, use "today" as the value with date_type "relative".
-For income, use a category like "gift", "salary", "refund", or "other" as fits.
-
-Description: "${text}"`
-              }
-            ]
-          }
-        ],
-        config: { responseMimeType: "application/json" }
-      });
-      const raw = (ai.text || "").replace(/```json|```/g, "").trim();
-      result = JSON.parse(raw);
-    } catch (err) {
-      console.error("Gemini parse error:", err.message);
-      return res.status(502).json({ success: false, error: "Could not understand that expense" });
-    }
-
-    const finalDate =
-      result.date_type === "exact" ? fixExactDate(result.value) : applyRelative(result.value);
 
     const { errors, value } = validateExpenseInput({
       amount: result.amount,
       category: result.category,
-      date: finalDate,
+      date: result.date,
       type: result.type
     });
     if (errors.length) return res.status(422).json({ success: false, error: errors.join(", ") });
