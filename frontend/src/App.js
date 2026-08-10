@@ -36,6 +36,13 @@ function formatCurrency(n) {
   return num.toLocaleString("en-IN", { maximumFractionDigits: 2 });
 }
 
+function formatDisplayDate(isoStr) {
+  const [y, m, d] = String(isoStr).slice(0, 10).split("-");
+  if (!y || !m || !d) return String(isoStr).slice(0, 10);
+  return `${d}-${m}-${y}`;
+}
+
+
 export default function App() {
   const [email, setEmail] = useState(() => localStorage.getItem("email"));
 
@@ -515,7 +522,8 @@ function Dashboard({ email, onLogout }) {
                             {row.type === "income" ? "+" : "−"}₹{formatCurrency(row.amount)}
                           </span>
                           <span className="category-badge">{row.category}</span>
-                          <span className="date-mono">{String(row.date).slice(0, 10)}</span>
+                          <span className="date-mono">{formatDisplayDate(row.date)}</span>
+                        
                           <div className="row-actions">
                             <button className="btn btn--small btn--ghost" onClick={() => startEdit(row)}>
                               Edit

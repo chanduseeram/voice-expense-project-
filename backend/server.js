@@ -158,8 +158,11 @@ function extractDateFromText(lower) {
   const now = new Date();
 
   // explicit "<month> <day>(st/nd/rd/th)? <year>?"
-  let m = lower.match(/\b([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/);
-  if (m && MONTHS.includes(m[1])) {
+  // explicit "<month> <day>(st/nd/rd/th)? <year>?" — anchored to real month names so a
+  // word+number pair earlier in the sentence (e.g. "got 20") can never be mistaken for it
+  const monthPattern = MONTHS.join("|");
+  let m = lower.match(new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s*(\\d{4}))?\\b`));
+  if (m) {
     const month = MONTHS.indexOf(m[1]);
     const day = parseInt(m[2], 10);
     const year = m[3] ? parseInt(m[3], 10) : now.getUTCFullYear();
